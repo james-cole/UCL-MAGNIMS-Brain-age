@@ -1,0 +1,680 @@
+---
+title: "MS brain age UCL MAGNIMS analysis"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+James Cole - October 2019. Built with R version `r getRversion()`  
+This is Notebook contains the final brain age analysis of MS patient data and controls from the UCL cohort, the MAGNIMS consortium and the Imperial College London PET study (n=25). The analysis uses brain-predicted age difference (brain-PAD) to look at brain ageing in the context of MS. The brain-PAD values were generated in PRONTO, using an independent healthy (n=2001) training dataset, and the values were corrected for proportional bias using the intercept and slope of the age by brain-predicted age regression in the training dataset.
+  
+### Initial set up of analysis
+Clear workspace, load libraries, set colour palette
+```{r message=FALSE, warning=FALSE}
+rm(list = ls()) ## clear workspace
+library(car)
+library(corrplot)
+library(cowplot)
+library(data.table)
+library(dplyr)
+library(emmeans)
+library(ggstance)
+library(ggplot2)
+library(grDevices)
+library(gridExtra)
+library(hier.part)
+library(jtools)
+library(knitr)
+library(lmerTest)
+library(MASS)
+library(metafor)
+library(plotrix)
+library(plyr)
+library(pryr)
+library(psych)
+library(qwraps2)
+library(reshape)
+library(reshape2)
+library(RColorBrewer)
+library(scales)
+library(stringr)
+library(survival)
+library(survminer)
+library(tidyr)
+ms.palette <- c("darkgreen", "darkorange", "red", "blue", "purple") # define MS colour scheme for groups
+sessionInfo()
+```
+#### Get data from CSV and define longitudinal data.frames
+```{r}
+setwd('/Users/jcole/Work/Brain ageing/Collaborations/MS')
+df <- read.csv("MS_brain_age_final_long.csv")
+df$subtype <- factor(df$subtype, levels = c("control", "CIS", "RRMS", "SPMS", "PPMS")) # reorder subtype factor to put controls first
+df$Cohort <- recode(df$Cohort, JR1 = "Imperial", C0 = "UCL0", C1 = "UCL1", C2 = "UCL2", C3 = "UCL3", C4 = "UCL4" ,C5 = "UCL5", C6 = "UCL6", C7 = "UCL7", A = "Amsterdam", B = "Barcelona", G = "Graz", M = "Milan", R = "Rome", S = "Siena") 
+```
+#### Exclude participants with errors in the database & correct time since diagnosis errors
+```{r message=FALSE, warning=FALSE}
+tmp <- df[df$Cohort == 'Amsterdam',] %>% group_by(PatientID) %>% dplyr::summarize(sd = sd(age_at_scan)) %>% arrange(desc(sd)) %>% filter(sd > 2)
+excluded_IDs <- sort(tmp$PatientID)
+# excluded_IDs <- unique(df[which(df$age_at_scan < df$age_at_baseline_scan1),1])
+excluded_scans <- (df %>% filter(str_detect(PatientID, paste(excluded_IDs, collapse = "|"))))["ScanName"]
+df <- df %>%
+  filter(!str_detect(PatientID, paste(excluded_IDs, collapse = "|")))
+rm(tmp)
+```
+There were `r length(excluded_IDs)` subjects with `r dim(excluded_scans)[1]` scans excluded in total. Data entry errors in original spreadsheet; age at baseline not consistent within subject.
+
+Load data for lesion filling analysis
+```{r}
+## read in data
+lesion_df <- read.csv(file = '~/Work/Brain ageing/Collaborations/MS/MAGNIMS/MAGNIMS20171224_final.csv')
+lesion_df$subtype <- factor(lesion_df$subtype, levels = c("control", "CIS", "RRMS", "SPMS", "PPMS"))
+## create ICV ratio variables
+lesion_df <- lesion_df %>%
+  mutate(ICV = GMV + WMV + CSFV) %>%
+  mutate(gm_icv_ratio = GMV/ICV) %>%
+  mutate(wm_icv_ratio = WMV/ICV)
+```
+
+#### Generate baseline only data.frame and show data frame structure
+```{r}
+df.bl <- df[(df$age_at_baseline_scan1 == df$age_at_scan),] # define baseline data.frame
+str(df)
+```
+### Basic stats
+#### Total number of subjects, and by group
+The total number of subjects included was n = `r dim(df.bl)[1]`
+
+The total number of MS patients (including CIS) was  n = `r table(df.bl$control0rest1)[2]` and healthy controls was n = `r table(df.bl$control0rest1)[1]`
+
+#### Number of scans in total and per group
+Total number of scans = `r sum(df.bl$NoScans)`
+
+
+#### Number of people with 2 or more scans
+```{r}
+df.bl %>%
+  filter(NoScans >= 2) %>%
+  group_by(control0rest1) %>%
+  tally()
+```
+#### Number of people with 3 or more scans
+```{r}
+df.bl %>%
+  filter(NoScans >= 3) %>%
+  group_by(control0rest1) %>%
+  tally()
+```
+### Generate demographics table using qwarps2
+```{r message=FALSE, warning=FALSE}
+options(qwraps2_markup = "markdown", digits = 2)
+
+table1 <-
+  list("N" =
+         list("Control" = ~ qwraps2::n_perc0(control0rest1 == "control", na_rm = T),
+              "MS"  = ~ qwraps2::n_perc0(control0rest1 == "MS", na_rm = T)),
+     "Gender" =
+       list("Female" = ~ qwraps2::n_perc0(gender == "female", show_symbol = T),
+            "Male"  = ~ qwraps2::n_perc0(gender == "male", show_symbol = T)),
+        "Number of scans" =
+       list("min" = ~ min(NoScans),
+            "max" = ~ max(NoScans),
+            "mean (sd)" = ~ qwraps2::mean_sd(NoScans)),
+       "Age at baseline scan (years)" =
+       list("min" = ~ min(age_at_baseline_scan1),
+            "max" = ~ max(age_at_baseline_scan1),
+            "mean (sd)" = ~ qwraps2::mean_sd(age_at_baseline_scan1)),
+       "Brain-predicted age at baseline scan (years)" =
+       list("min" = ~ min(BrainAge),
+            "max" = ~ max(BrainAge),
+            "mean (sd)" = ~ qwraps2::mean_sd(BrainAge)),
+       "Disease duration at baseline (years)" =
+       list("min" = ~ min(disease_duration, na.rm = T),
+            "max" = ~ max(disease_duration, na.rm = T),
+            "mean (sd)" = ~ qwraps2::mean_sd(disease_duration, na_rm = T, show_n = "never")),
+        "EDSS at baseline " =
+       list("min" = ~ min(EDSSbaseline, na.rm = T),
+            "max" = ~ max(EDSSbaseline, na.rm = T),
+            "mean (sd)" = ~ qwraps2::mean_sd(EDSSbaseline, na_rm = T, show_n = "never")),
+       "MS subtype" =
+       list("CIS" = ~ qwraps2::n_perc0(subtype == "CIS", show_symbol = T),
+            "RRMS"  = ~ qwraps2::n_perc0(subtype == "RRMS", show_symbol = T),
+            "SPMS"  = ~ qwraps2::n_perc0(subtype == "SPMS", show_symbol = T),
+            "PPMS"  = ~ qwraps2::n_perc0(subtype == "PPMS", show_symbol = T)),
+       "Treatment" =
+         list("Yes" = ~ qwraps2::n_perc0(DMT_YesNoNA == "YES", na_rm = T, show_symbol = T),
+              "No"  = ~ qwraps2::n_perc0(DMT_YesNoNA == "NO", na_rm = T, show_symbol = T))
+       )
+
+print(summary_table(dplyr::group_by(df.bl, control0rest1), table1),
+      rtitle = "Sample Chararcteristics",
+      cnames = c("Controls", "MS patients"))
+```
+#### Need to get treatment NAs using table()
+```{r}
+table(df.bl$DMT_YesNoNA, df.bl$control0rest1, useNA = "ifany")[,"MS"]
+```
+
+#### Need to get length of follow-up from longitudinal database
+##### Length of follow-up
+```{r}
+options(digits = 3) ## return digits option to default
+df %>%
+  filter(NoScans >= 2) %>%
+  group_by(PatientID) %>%
+  slice(which.max(interval)) %>%
+  # top_n(n = 1, wt = interval) %>%
+  group_by(control0rest1) %>%
+  dplyr::summarise(mean(interval), sd(interval), min(interval), max(interval))
+options(digits = 7) ## return digits option to default
+```
+
+Correlations between demographics and clinical variables
+```{r}
+cor.mat <- cbind(df.bl$age_at_scan, df.bl$disease_onset_age, df.bl$disease_duration, df.bl$EDSSatScan)
+colnames(cor.mat) <- c("Age at scan", "Age at diagnosis", "Time since diagnosis", "EDSS at scan")
+corrplot(cor(cor.mat, use = "pairwise"), type = "upper", method = "color", addCoef.col = T, tl.col = "black", diag = F)
+```
+
+### Baseline brain-age analysis
+```{r paged.print=FALSE}
+describeBy(df.bl$BrainPAD, df.bl$control0rest1, mat = T, digits = 3) # brain-PAD by MS patient vs. controls
+```
+#### Estimated marginal means
+Generate EMMs for all MS/CIS and healthy controls. LME adjusting for age, gender, ICV, cohort and scanner status.
+```{r}
+fit <- (lmer(BrainPAD ~ control0rest1 + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))
+emmeans(object = fit, specs = c("control0rest1", "age_at_baseline_scan1", "ICV"))
+```
+
+#### Effects of cohort and scanner status on brain-PAD
+The significant interaction motivates nesting in the LME.
+```{r}
+with(df.bl, anova(lm(BrainPAD ~ Cohort * scanner_status)))
+```
+#### Meta-analysis looking at all the separate cohorts with MS/CIS patients and controls
+Check which cohorts contain healthy controls and patients.
+```{r}
+table(df.bl$subtype, df.bl$Cohort)
+```
+
+Create data.frame with summary data appropriate for meta-analysis.
+```{r}
+tmp0 <- df.bl %>% group_by(Cohort, control0rest1) %>% dplyr::summarise(length(control0rest1))
+meta.cohorts <- as.list(tmp0[tmp0$control0rest1 == "control",1])$Cohort
+tmp <- df.bl %>%
+  filter(str_detect(Cohort, paste(meta.cohorts, collapse = "|")))
+tmp1 <- tmp %>% group_by(Cohort, control0rest1) %>% dplyr::summarise(n = n(), Mean = mean(BrainPAD), SD  =  sd(BrainPAD))
+tmp2 <- dcast(tmp1, Cohort ~ control0rest1, value.var = "n")
+tmp3 <- dcast(tmp1, Cohort ~ control0rest1, value.var = "Mean")
+tmp4 <- dcast(tmp1, Cohort ~ control0rest1, value.var = "SD")
+names(tmp2) <- c("Cohort", "control_n", "MS_n")
+names(tmp3) <- c("Cohort", "control_mean", "MS_mean")
+names(tmp4) <- c("Cohort", "control_sd", "MS_sd")
+tmp1x <- tmp %>% group_by(Cohort) %>% dplyr::summarise(pooled.SD  =  sd(BrainPAD))
+meta.df <- join_all(list(tmp2,tmp3,tmp4, tmp1x), by = 'Cohort', type = 'left')
+rm(list = ls(pattern = 'tmp*')) # remove temporary data frames
+```
+Run meta-analysis using the metafor package, to fit a random-effects meta-analysis using REML.
+```{r}
+meta.df <- escalc(m1i = control_mean, sd1i = pooled.SD, n1i = control_n, m2i = MS_mean, sd2i = pooled.SD, n2i = MS_n, measure = "MD", data = meta.df, digits = 2)
+meta.results <- rma(yi, vi, data = meta.df, method = "REML")
+print(meta.results)
+confint(meta.results)
+```
+Forest plot of results
+```{r message=FALSE, warning=FALSE}
+plot.forest %<a-% {
+forest(meta.results, ilab = cbind(meta.df$MS_n, meta.df$control_n), ilab.xpos = c(-30,-23), slab = meta.df$Cohort, digits = 1, xlab = "MS vs. Healthy control group mean difference", steps = 6, col = "red", cex = 1.25, pch = 22, bg = "blue"); text(c(-40, -30, -23), 7.6, c("Cohort", "MS n", "HC n"), font = 2, cex = 1.25)
+}
+plot.forest
+cairo_pdf("plots/forest_plot.pdf", 6,5)
+plot.forest
+dev.off()
+```
+
+Linear regression analysis restricted to cohort UCL3, includes covariates: age, gender, intracranial volume.
+```{r}
+summary(lm(BrainPAD ~ control0rest1 + age_at_baseline_scan1 + gender + ICV, data = subset(df.bl, df.bl$Cohort == "UCL3")))
+```
+### Main result:
+#### LME model to predict brain-PAD based on group
+```{r}
+# LME model of control vs. MS, including Cohort and scanner status as random effects
+m1 <- lmer(BrainPAD ~ control0rest1 + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl)
+summary(m1)
+round(confint(m1),2)
+```
+
+#### Lesion filling
+To establish whether using the FSL lesion filling software influences brain-predicted age values.
+This analysis was conducted only in UCL patients. 
+```{r paged.print=FALSE}
+with(subset(lesion_df, lesion_df$subtype != "control"), describeBy(filled_brain_age, subtype))
+```
+Correlation between brain-predicted age from filled and unfilled images: Pearson's r = `r round(with(subset(lesion_df, lesion_df$subtype != "control"), cor(filled_brain_age, brain_age, use = "pairwise")),3)`.
+Median absolute error (MAE) between brain-predicted age from filled and unfilled images = `r with(subset(lesion_df, lesion_df$subtype != "control"), median(abs(filled_brain_age - brain_age), na.rm = T))` years.
+Mean difference between brain-predicted age from filled and unfilled images = `r round(with(subset(lesion_df, lesion_df$subtype != "control"), mean(filled_brain_age - brain_age, na.rm = T)),3)` years.
+
+```{r}
+ggplot(data = subset(lesion_df, lesion_df$subtype != "control"), aes(x = brain_age, y = filled_brain_age)) +
+  geom_abline(slope = 1) +
+  geom_point(pch = 21, aes(fill = subtype), size = 2) +
+  labs(x = "Unfilled brain-predicted age (years)", y = "Lesion-filled brain-predicted age (years)") +
+  xlim(c(20,90)) +
+  scale_fill_manual(values = ms.palette[-1]) +
+  theme_bw() + theme(legend.position = c(0.9, 0.2))
+ggsave("~/Work/Brain ageing/Collaborations/MS/plots/lesion_filling_brain_age_plot.pdf", width = 5, height = 5, useDingbats = FALSE)
+```
+#### Bland-Altman plot
+```{r}
+mean.diff <- mean(lesion_df$brain_age - lesion_df$filled_brain_age, na.rm = T)
+sd.diff <- sd(lesion_df$brain_age - lesion_df$filled_brain_age, na.rm = T)
+ggplot(data = subset(lesion_df, lesion_df$subtype != "control"), aes(x = ((brain_age + filled_brain_age)/2), y = brain_age - filled_brain_age)) +
+  geom_abline(slope = 0, lty = 2) +
+  geom_point(pch = 21, aes(fill = subtype), size = 2) +
+  geom_hline(yintercept = mean.diff, color = "darkgoldenrod1", lwd = 1) + # mean difference line
+  geom_hline(yintercept = mean.diff + 1.96*sd.diff, color = "darkgoldenrod2", lty = 2) + # upper 95% line
+  geom_hline(yintercept = mean.diff - 1.96*sd.diff, color = "darkgoldenrod2", lty = 2) + # lower 95% line
+  # geom_smooth(method = "lm", level = 0.95, color = "black", lwd = 0.3) +
+  labs(x = "Mean of filled/unfilled brain-predicted age (years)", y = "Unfilled - Lesion-filled brain-predicted age (years)") +
+  # ylim(c(-20,20)) +
+  scale_fill_manual(values = ms.palette[-1]) +
+  theme_bw() + theme(legend.position = c(0.1, 0.8)) +
+  annotate("text", x = 25, y = mean.diff + 1.96*sd.diff + 0.5, label = "+1.96*SD", color = "darkgoldenrod2") +
+  annotate("text", x = 25, y = mean.diff - 1.96*sd.diff - 0.5, label = "-1.96*SD", color = "darkgoldenrod2") +
+  annotate("text", x = 27.5, y = mean.diff + 0.8, label = "Mean difference", color = "darkgoldenrod2")
+ggsave("~/Work/Brain ageing/Collaborations/MS/plots/lesion_filling_brain_age_BA_plot.pdf", width = 8, height = 5, useDingbats = FALSE)
+```
+
+#### LME model predicted brain-PAD based on subtype
+This analysis excluded controls.
+```{r}
+# LME model of subtype, including Cohort and scanner status as random effects
+m2 <- lmer(BrainPAD ~ subtype + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control"))
+summary(m2)
+# round(confint(m2),2)
+```
+#### Brain-PAD estimated marginal means for subtypes
+Generate EMMs for all MS subtypes. LME adjusting for age, gender, ICV, cohort and scanner status.
+```{r}
+fit <- (lmer(BrainPAD ~ subtype + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control")))
+emmeans(object = fit, specs = c("subtype", "age_at_baseline_scan1", "ICV"))
+```
+
+### Brain-PAD boxplot by MS subtype
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+# calculate Ns
+control_n <- with(df.bl, table(subtype))["control"]
+cis_n <- with(df.bl, table(subtype))["CIS"]
+rrms_n <- with(df.bl, table(subtype))["RRMS"]
+spms_n <- with(df.bl, table(subtype))["SPMS"]
+ppms_n <- with(df.bl, table(subtype))["PPMS"]
+
+plot.pryr %<a-% {
+with(df.bl, ehplot(BrainPAD, groups = subtype, ylim = c(-20,52), pch = 21, bg = ms.palette[as.numeric(subtype)], box = T, offset = 0.1, intervals = 50, xlab = "Groups", ylab = "Brain-PAD (years)", main = "Baseline Brain-PAD by study group")) + 
+  abline(0,0, lty = 2) +
+  text(1,51, paste("N = ", control_n, sep = ""), cex = 0.8) +
+  text(2,51, paste("N = ", cis_n, sep = ""), cex = 0.8) +
+  text(3,51, paste("N = ", rrms_n, sep = ""), cex = 0.8) +
+  text(4,51, paste("N = ", spms_n, sep = ""), cex = 0.8) +
+  text(5,51, paste("N = ", ppms_n, sep = ""), cex = 0.8)
+}
+plot.pryr
+cairo_pdf("plots/MS_UCL_MAGNIMS_combined_group_Brain-PAD.pdf", 8,8)
+plot.pryr
+dev.off()
+```
+### Brain-PAD boxplot by MS subtype in cohort UCL3 only
+```{r message=FALSE, warning=FALSE}
+# calculate Ns
+C3.bl <- df.bl %>% filter(Cohort == "UCL3") 
+C3.bl$subtype <- factor(C3.bl$subtype)
+control_n <- with(C3.bl, table(subtype))["control"]
+rrms_n <- with(C3.bl, table(subtype))["RRMS"]
+spms_n <- with(C3.bl, table(subtype))["SPMS"]
+ppms_n <- with(C3.bl, table(subtype))["PPMS"]
+
+plot.pryr %<a-% {
+  with(C3.bl, ehplot(BrainPAD, groups = subtype, ylim = c(-20,52), pch = 21, bg = ms.palette[-2][as.numeric(subtype)], box = T, offset = 0.1, intervals = 50, xlab = "Groups", ylab = "Brain-PAD (years)", main = "Baseline Brain-PAD by study group")) + 
+  abline(0,0, lty = 2) +
+  text(1,51, paste("N = ", control_n, sep = ""), cex = 0.8) +
+  text(2,51, paste("N = ", rrms_n, sep = ""), cex = 0.8) +
+  text(3,51, paste("N = ", spms_n, sep = ""), cex = 0.8) +
+  text(4,51, paste("N = ", ppms_n, sep = ""), cex = 0.8)
+}
+plot.pryr
+cairo_pdf("plots/MS_cohort_C3_Brain-PAD.pdf", 8,8)
+plot.pryr
+dev.off()
+```
+
+#### Post-hoc pairwise brain-PAD comparison of subtypes
+```{r}
+round(with(df.bl, TukeyHSD(aov(BrainPAD ~ subtype)))$subtype, 4)
+```
+### Brain-PAD by subtype descriptive statistics
+```{r paged.print=FALSE}
+with(df.bl, describeBy(BrainPAD, subtype, mat = T, digits = 1)) # brain-PAD by MS patient subtypes and controls
+```
+### Correlates of brain-PAD at baseline
+#### EDSS score, an index of disability
+LME accounting for fixed effects of age at baseline, gender, ICV and random effects of Cohort and scanner status.
+```{r message=FALSE, warning=FALSE}
+summary(lmer(BrainPAD ~ EDSSbaseline + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))
+```
+When predicting brain-PAD in a LME model, the effect of EDSS at baseline beta = `r round(summary(lmer(BrainPAD ~ EDSSbaseline + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))$coefficients["EDSSbaseline","Estimate"],2)`, 95% CI = `r round(confint(lmer(BrainPAD ~ EDSSbaseline + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))["EDSSbaseline",],2)`, p = `r format.pval(summary(lmer(BrainPAD ~ EDSSbaseline + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))$coefficients["EDSSbaseline","Pr(>|t|)"])`.
+
+#### Test for interaction between subtype and EDSS on brain-PAD:
+```{r}
+fit.edss <- lmer(BrainPAD ~ EDSSbaseline * subtype + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control"))
+round(as.matrix(anova(fit.edss)["EDSSbaseline:subtype",]),3)
+```
+Use simple slopes from jtools to extract adjusted slopes for each subtype.
+```{r paged.print=FALSE}
+sim_slopes(fit.edss, pred = "EDSSbaseline", modx = "subtype", johnson_neyman = F)
+```
+Use interact_plot() from jtools to plot the adjusted slopes per group.
+```{r message=FALSE, warning=FALSE}
+interact_plot(fit.edss, pred = "EDSSbaseline", modx = "subtype", plot.points = T, interval = T, vary.lty = T, facet.modx = T, x.label = "EDSS", y.label = "Brain-PAD (years)", point.size = 1, modx.labels = c("CIS", "RRMS", "SPMS", "PPMS")) + geom_hline(yintercept = 0, lty = 2) + theme_bw()  +
+  scale_fill_manual(values = ms.palette[2:5], name = "MS subtype") +
+  scale_color_manual(values = ms.palette[2:5], name = "MS subtype")
+ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/EDSS_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
+```
+
+### Age at diagnosis
+LME accounting for fixed effects of age at baseline, gender, ICV and random effects of Cohort and scanner status.
+Exclude CIS patients and healthy controls.
+```{r}
+summary(lmer(BrainPAD ~ disease_onset_age + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS")))
+```
+When predicting brain-PAD in a LME model, the effect of age at diagnosis at baseline beta = `r round(summary(lmer(BrainPAD ~ disease_onset_age + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS")))$coefficients["disease_onset_age","Estimate"],2)`, 95% CI = `r round(confint(lmer(BrainPAD ~ disease_onset_age + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS")))["disease_onset_age",],2)`, p = `r format.pval(summary(lmer(BrainPAD ~ disease_onset_age + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS")))$coefficients["disease_onset_age","Pr(>|t|)"])`.
+
+#### Test for interaction between subtype and age at diagnosis on brain-PAD:
+```{r}
+fit.age <- lmer(BrainPAD ~ disease_onset_age * subtype + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS"))
+round(as.matrix(anova(fit.age)["disease_onset_age:subtype",]),3)
+```
+Use simple slopes from jtools to extract adjusted slopes for each subtype.
+```{r message=FALSE, paged.print=FALSE}
+sim_slopes(fit.age, pred = "disease_onset_age", modx = "subtype", johnson_neyman = F)
+```
+```{r message=FALSE, warning=FALSE}
+interact_plot(fit.age, pred = "disease_onset_age", modx = "subtype", plot.points = T, interval = T, vary.lty = T, facet.modx = T, x.label = "Age at clincial diagnosis (years)", y.label = "Brain-PAD (years)", point.size = 1, modx.labels = c("RRMS", "SPMS", "PPMS")) + geom_hline(yintercept = 0, lty = 2) +  theme_bw()  +
+  scale_fill_manual(values = ms.palette[3:5], name = "MS subtype") +
+  scale_color_manual(values = ms.palette[3:5], name = "MS subtype")
+ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/diagnosis_age_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
+```
+
+### Time since diagnosis
+LME accounting for fixed effects of age at baseline, gender, ICV and random effects of Cohort and scanner status.
+Exclude controls, CIS patients and anyone with a time since diagnosis = 0.
+```{r}
+summary(lmer(BrainPAD ~ disease_duration_at_baseline_scan1 + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "CIS" & df.bl$disease_duration > 0)))
+```
+When predicting brain-PAD in a LME model, the effect of time since diagnosis at baseline beta = `r round(summary(lmer(BrainPAD ~ disease_duration_at_baseline_scan1 + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))$coefficients["disease_duration_at_baseline_scan1","Estimate"],2)`, 95% CI = `r round(confint(lmer(BrainPAD ~ disease_duration_at_baseline_scan1 + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))["disease_duration_at_baseline_scan1",],2)`, p = `r format.pval(summary(lmer(BrainPAD ~ disease_duration_at_baseline_scan1 + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = df.bl))$coefficients["disease_duration_at_baseline_scan1","Pr(>|t|)"])`.
+
+#### Test for interaction between subtype and time since diagnosis on brain-PAD
+```{r}
+fit.time <- lmer(BrainPAD ~ disease_duration_at_baseline_scan1 * subtype + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS" & df.bl$disease_duration > 0))
+round(as.matrix(anova(fit.time)["disease_duration_at_baseline_scan1:subtype",]),3)
+```
+Use simple slopes from jtools to extract adjusted slopes for each subtype.
+```{r paged.print=FALSE}
+sim_slopes(fit.time, pred = "disease_duration_at_baseline_scan1", modx = "subtype", johnson_neyman = F)
+```
+Plot
+```{r message=FALSE, warning=FALSE}
+interact_plot(fit.time, pred = "disease_duration_at_baseline_scan1", modx = "subtype", plot.points = T, interval = T, vary.lty = T, facet.modx = T, x.label = "Time since clinical diagnosis (years)", y.label = "Brain-PAD (years)", point.size = 1, modx.labels = c("RRMS", "SPMS", "PPMS")) + geom_hline(yintercept = 0, lty = 2) + theme_bw()  +
+  scale_fill_manual(values = ms.palette[3:5], name = "MS subtype") +
+  scale_color_manual(values = ms.palette[3:5], name = "MS subtype")
+ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/diagnosis_years_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
+```
+
+## EDSS progression survival analysis
+Based on Arman Eshaghi's code used in [Eshaghi et al., 2018 Annals of Neurology.](https://onlinelibrary.wiley.com/doi/full/10.1002/ana.25145)
+```{r}
+# function for characterising EDSS progression, based on different rates of change and different baseline EDSS values
+is_sustained_progression <- function(edssAtStart, change){
+  sustainedProgression <- FALSE
+  #if start of edss is 0, 1.5 increase is considered sustained progression
+  if ((edssAtStart < 1) & (change >= 1.5)) {
+    sustainedProgression <- TRUE
+  }
+  #if start of edss is 6 or above, 0.5 increase is considered sustained progression
+  else if ((edssAtStart >= 6) & (change >= 0.5 )) {
+    sustainedProgression <- TRUE
+  }
+  #if start of edss is more than zero but less than 6, sustained progression is by 1 increase in edss
+  else if ((edssAtStart >= 1 ) & (edssAtStart < 6 )  & (change >= 1  )) {
+    sustainedProgression <- TRUE
+  }
+  return(sustainedProgression)
+}
+
+## determine change in EDSS from baseline to last follow-up  
+## select latest EDSS per subject in subjects with 2 or more assessments
+y1 <- df %>%
+  filter(!subtype == "control")  %>%
+  filter(!is.na(EDSSbaseline)) %>%
+  group_by(PatientID) %>%
+  top_n(1, interval) %>%
+  ungroup() %>%
+  dplyr::rename(latest_EDSS = EDSSatScan) %>%
+  dplyr::select(PatientID, interval, EDSSbaseline, latest_EDSS) %>%
+  filter(!is.na(latest_EDSS)) %>%
+  mutate(EDSSchange = latest_EDSS - EDSSbaseline)
+
+y1$EDSS_progression <-  mapply(is_sustained_progression, y1$EDSSbaseline, y1$EDSSchange) # apply Arman's function
+## get baseline brain-PAD and brain volumetric measures
+y2 <- df %>%
+  filter(!subtype == "control")  %>%
+  filter(interval == 0) %>%
+  filter(!is.na(EDSSbaseline)) %>%
+  dplyr::rename(BrainPAD_baseline = BrainPAD) %>%
+  dplyr::rename(GM_vol_baseline = GM_vol) %>%
+  dplyr::rename(WM_vol_baseline = WM_vol) %>%
+  dplyr::select(-one_of('interval'))
+
+y3 <- right_join(y1, y2, by = c("PatientID")) %>%
+  filter(!is.na(latest_EDSS))
+```
+#### Numbers of EDSS progressors
+The number of MS patients with >= 2 EDSS scores was `r y3 %>% tally()`.
+```{r}
+table(y3$EDSS_progression) # calculate proportion of patients who progress
+round(prop.table(table(y3$EDSS_progression)),3) # calculate percentage of patients who progress
+```
+#### Run survival analysis
+```{r}
+# creating new response function
+S <- Surv(time = y3$interval, event = y3$EDSS_progression)
+# Brain-PAD, age, sex model
+m1 <- coxph(S ~ BrainPAD_baseline + age_at_baseline_scan1 + gender, data = y3)
+summary(m1)
+cox.zph(m1)
+```
+The hazard ratio for brain-PAD on time-to-disease-progression was HR (95% CI) = `r round(summary(m1)$conf.int['BrainPAD_baseline',-2],3)`. That means for every additional +1 year of brain-PAD there is a `r round(summary(m1)$conf.int['BrainPAD_baseline',"exp(coef)"],3)`% increase in the likelihood of EDSS progression. Extrapolated over 5 years of brain-PAD, there is a `r round(summary(m1)$conf.int['BrainPAD_baseline',"exp(coef)"]^5,3)` increase in the likelihood of EDSS progression.
+
+#### Time-to-EDSS progression Kaplan-Meier plots
+```{r}
+# Brain-PAD median split
+km.plot.df <- y3 %>% mutate(split_BrainPAD = ntile(BrainPAD_baseline, 2))
+```
+Based on a median split of brain-PAD. The median value = `r round(median(km.plot.df$BrainPAD_baseline),2)` years.
+```{r}
+# Run survplot on survival object
+S <- Surv(time = km.plot.df$interval, event = km.plot.df$EDSS_progression) # response function
+survplot <- ggsurvplot(survfit(S ~ split_BrainPAD, data = km.plot.df), surv.plot.height = 0.9, ggtheme = theme_survminer(), risk.table = T, cumcensor = F, conf.int = F, palette = c("blue", "red"), censor = F , legend.labs = c("Brain-PAD < median", "Brain-PAD > median"))
+survplot
+ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/KM_brain-PAD_plot.pdf", height = 8, width = 8, print(survplot), useDingbats = FALSE)
+```
+
+## Longitudinal brain-age analysis
+The total number of people with two or more scans was n = `r dim(subset(df.bl, df.bl$NoScans >= 2))[1]`. 
+
+#### determine change in brain-PAD from baseline to last follow-up
+```{r}
+## select latest brain-PAD per subject in subjects with 2 or more assessments
+z1 <- df %>%
+  filter(NoScans >= 2)  %>%
+  group_by(PatientID) %>%
+  top_n(1, interval) %>%
+  ungroup() %>%
+  dplyr::rename(latest_BrainPAD = BrainPAD) %>%
+  dplyr::select(PatientID, interval, latest_BrainPAD) 
+
+## baseline brain-PAD
+z2 <- df %>%
+  filter(NoScans >= 2)  %>%
+  filter(interval == 0) %>%
+  filter(!is.na(BrainPAD)) %>%
+  dplyr::rename(BrainPAD_baseline = BrainPAD) %>%
+  dplyr::rename(GM_vol_baseline = GM_vol) %>%
+  dplyr::rename(WM_vol_baseline = WM_vol) %>%
+  dplyr::select(-one_of('interval'))
+
+## calculate change in brain-PAD between baseline and latest brain-PAD
+z3 <- right_join(z1, z2, by = c("PatientID")) %>%
+  mutate(BrainPAD_change = latest_BrainPAD - BrainPAD_baseline)
+```
+#### Mean annualised rates of change in brain-PAD per group
+```{r paged.print=FALSE}
+describeBy(z3$BrainPAD_change/z3$interval, z3$subtype, mat = T, digits = 2)
+```
+#### determine change in EDSS from baseline to last follow-up
+```{r}
+## select latest EDSS per subject in subjects with 2 or more assessments
+a1 <- df %>%
+  filter(NoScans >= 2)  %>%
+  group_by(PatientID) %>%
+  top_n(1, interval) %>%
+  ungroup() %>%
+  dplyr::rename(latest_EDSSatScan = EDSSatScan) %>%
+  dplyr::select(PatientID, interval, latest_EDSSatScan) 
+
+## baseline EDSS
+a2 <- df %>%
+  filter(NoScans >= 2)  %>%
+  filter(interval == 0) %>%
+  filter(!is.na(EDSSatScan)) %>%
+  dplyr::rename(EDSSatScan_baseline = EDSSatScan) %>%
+  dplyr::rename(BrainPAD_baseline = BrainPAD) %>%
+  dplyr::rename(GM_vol_baseline = GM_vol) %>%
+  dplyr::rename(WM_vol_baseline = WM_vol) %>%
+  dplyr::select(-one_of('interval'))
+
+## calculate change in brain-PAD between baseline and latest brain-PAD
+a3 <- right_join(a1, a2, by = c("PatientID")) %>%
+  mutate(EDSS_change = latest_EDSSatScan - EDSSatScan_baseline)
+```
+#### Mean annualised rates of change in EDSS per group
+```{r paged.print=FALSE}
+with(subset(a3, a3$control0rest1 != "control"), describeBy(EDSS_change/interval, subtype, mat = F, digits = 2))
+```
+#### Relationship between annualised EDSS change and brain-PAD change
+
+```{r message=FALSE}
+delta.df <- join(a3, z3)
+cor.test(delta.df$EDSS_change, delta.df$BrainPAD_change, method = "pearson")
+```
+Historgams of baseline EDSS scores and EDSS changes
+```{r warning=FALSE}
+plot1 <- ggplot(df.bl, aes(x = EDSSbaseline)) + geom_histogram(binwidth = 1, fill = "dodgerblue", colour = "black") + xlab("EDSS at baseline") + theme_bw()
+plot2 <- ggplot(delta.df, aes(x = EDSS_change)) + geom_histogram(binwidth = 1, fill = "dodgerblue", colour = "black") + xlab("EDSS change") + theme_bw()
+plot_grid(plot1, plot2, labels = c("A", "B"))
+```
+
+#### Interaction between subtype and EDSS change
+```{r}
+fit.change <- lm(BrainPAD_change ~ EDSS_change * subtype, data = delta.df)
+anova(fit.change)
+```
+
+Use jtools package to get slopes from the model, per subtype.
+```{r paged.print=FALSE}
+sim_slopes(fit.change, pred = "EDSS_change", modx = "subtype", johnson_neyman = F, digits = 4)
+```
+Plot
+```{r message=FALSE, warning=FALSE}
+interact_plot(fit.change, pred = "EDSS_change", modx = "subtype", plot.points = T, interval = T, facet.modx = T, x.label = "EDSS annualised change", y.label = "Brain-PAD annualised change", modx.labels = c("CIS", "RRMS", "SPMS", "PPMS")) + geom_hline(yintercept = 0, lty = 2) + theme_bw()  +
+  scale_fill_manual(values = ms.palette[-1], name = "MS subtype") +
+  scale_color_manual(values = ms.palette[-1], name = "MS subtype")
+ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/change_EDSS_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
+```
+Correlate baseline brain-PAD with the number of follow-up scans completed in the n=`r with(subset(df.bl, df.bl$NoScans > 1 & df.bl$subtype == "SPMS"), table(subtype))["SPMS"]` with >1 scan.
+```{r}
+with(subset(df.bl, df.bl$NoScans > 1 & df.bl$subtype == "SPMS"), cor.test(BrainPAD, NoScans, method = "spearman"))
+```
+
+#### Longitudinal brain-predicted age trajectories
+Interaction between group and time
+```{r}
+## conditional growth model - random effects of participant, cohort and scanner status
+model_int.group <- lmer(BrainPAD ~ control0rest1 * interval + gender + age_at_baseline_scan1 + ICV + (interval| PatientID) + (1|Cohort/scanner_status), data = df) 
+round(anova(model_int.group)["control0rest1:interval",],3)
+```
+#### Brain-PAD change EMMs, using annualised difference between baseline and final follow-up.
+Generate EMMs for all groups and MS subtypes. LME adjusting for age, gender, ICV, cohort and scanner status.
+```{r}
+fit <- (lmer(BrainPAD_change ~ subtype + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = z3))
+emmeans(object = fit, specs = c("subtype"))
+```
+Generate EMMs for HCs and MS/CIS combined. LME adjusting for age, gender, ICV, cohort and scanner status.
+```{r message=FALSE, warning=FALSE}
+fit <- (lmer(BrainPAD_change ~ control0rest1 + age_at_baseline_scan1 + gender + ICV + (1|Cohort/scanner_status), data = z3))
+emmeans(object = fit, specs = c("control0rest1"))
+```
+#### Slopes per group
+Controls
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+control.slope <- summary(lmer(BrainPAD ~ interval + gender + age_at_baseline_scan1 + ICV + (interval| PatientID) + (1|Cohort/scanner_status), data = subset(df, df$control0rest1 == "control")))$coef["interval","Estimate"]
+control.intercept <- summary(lmer(BrainPAD ~ interval + gender + age_at_baseline_scan1 + ICV + (interval| PatientID) + (1|Cohort/scanner_status), data = subset(df, df$control0rest1 == "control")))$coef["(Intercept)","Estimate"]
+```
+MS patients
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+ms.slope <- summary(lmer(BrainPAD ~ interval + gender + age_at_baseline_scan1 + ICV + (interval| PatientID) + (1|Cohort/scanner_status), data = subset(df, df$control0rest1 == "MS")))$coef["interval","Estimate"]
+ms.intercept <- summary(lmer(BrainPAD ~ interval + gender + age_at_baseline_scan1 + ICV + (interval| PatientID) + (1|Cohort/scanner_status), data = subset(df, df$control0rest1 == "MS")))$coef["(Intercept)","Estimate"]
+```
+
+#### Longitudinal brain-PAD by interval plots
+```{r}
+ggplot(data = df, aes(x = interval, y = BrainPAD, fill = subtype)) +
+  geom_hline(yintercept = 0, lty = 2) +
+  geom_line(aes(group = PatientID, colour = subtype), alpha = 0.3, linetype = 1, size = 0.25) +
+  # geom_point(aes(fill = subtype), pch = 21, size = 0.5, alpha = 0.2) +
+  geom_abline(slope = control.slope, intercept = control.intercept, col = "blue") +
+  geom_abline(slope = ms.slope, intercept = ms.intercept, col = "red") +
+  labs(x = "Time (years)", y = "Brain-predicted age difference (years)") +
+  scale_fill_manual(values = ms.palette) +
+  scale_color_manual(values = ms.palette) +
+  theme_bw() + theme(legend.position = "none")
+
+ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/longitudinal_brain-PAD_time_plot.pdf", height = 6, width = 6, useDingbats = FALSE)
+```
+
+
+```{r}
+ggplot(data = df, aes(x = age_at_scan, y = BrainPAD, fill = subtype)) +
+  geom_hline(yintercept = 0, lty = 2) +
+  geom_line(aes(group = PatientID, colour = subtype), alpha = 0.5, linetype = 1, size = 0.25) +
+  labs(x = "Time (years)", y = "Brain-predicted age difference (years)") +
+  scale_fill_manual(values = ms.palette) +
+  scale_color_manual(values = ms.palette) +
+  facet_wrap(~ subtype, scales = "free_x") +
+  theme_bw() + theme(legend.position = "none")
+```
+
+### Hierarchical partitioning of brain-PAD
+```{r paged.print=FALSE}
+a <- summary(lm(BrainPAD ~ age_at_baseline_scan1 + gender + gm_vol_ratio_icv + wm_vol_ratio_icv + csf_vol_ratio_icv + Cohort, data = df.bl))
+print(a)
+h.p <- hier.part(y = df.bl$BrainPAD, xcan = df.bl[c("age_at_baseline_scan1","gender","gm_vol_ratio_icv", "wm_vol_ratio_icv", "csf_vol_ratio_icv", "Cohort")], gof = "Rsqu")
+print(h.p)
+sum(h.p$IJ["I"]) - a$adj.r.squared
+sum(h.p$IJ["I"])
+sum(h.p$IJ["J"])
+round(h.p$IJ, 3)
+round(h.p$I.perc, 1)
+```
