@@ -2,19 +2,21 @@
 title: "MS brain age UCL MAGNIMS analysis"
 knit: (function(input_file, encoding) {
   out_dir <- 'docs';
-  rmarkdown::render(input_file,
- encoding=encoding,
+  rmarkdown::render(input_file, 
+  encoding=encoding,
  output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
-output: html_document
-
+output:
+  html_document: default
+  pdf_document: default
 ---
+
 James Cole - December 2019. Built with R version `r getRversion()`  
 This is Notebook contains the final brain age analysis of MS patient data and controls from the UCL cohort, the MAGNIMS consortium and the Imperial College London PET study (n=25). The analysis uses brain-predicted age difference (brain-PAD) to look at brain ageing in the context of MS. The brain-PAD values were generated in PRONTO, using an independent healthy (n=2001) training dataset, and the values were corrected for proportional bias using the intercept and slope of the age by brain-predicted age regression in the training dataset.
   
 # Set-up
 ```{r setup, include=FALSE, cache = FALSE}
 ## libraries
-Packages <- c("car", "corrplot", "cowplot", "data.table", "dplyr", "effects", "emmeans", "ggstance", "ggplot2", "glmmTMB", "grDevices", "gridExtra", "hier.part", "jtools", "knitr", "lm.beta", "lmerTest", "MASS", "metafor", "plotrix", "plyr", "ppcor", "pryr", "psych", "qwraps2", "RColorBrewer", "scales",  "sjmisc", "sjPlot", "stringr", "survival", "survminer", "tidyr")
+Packages <- c("car", "corrplot", "cowplot", "data.table", "dplyr", "effects", "emmeans", "ggstance", "ggplot2", "glmmTMB", "grDevices", "gridExtra", "hier.part", "jtools", "kableExtra", "knitr", "lm.beta", "lmerTest", "MASS", "metafor", "plotrix", "plyr", "ppcor", "pryr", "psych", "qwraps2", "RColorBrewer", "scales",  "sjmisc", "sjPlot", "stringr", "survival", "survminer", "tidyr")
 lapply(Packages, library, character.only = TRUE)
 
 ## setting working directory
@@ -65,13 +67,18 @@ lesion_df <- lesion_df %>%
 ```
 
 ## Recode scanner status variable to field strength
-Pre-post 2004 data only available for one site.
+Pre-post 2004 data only available for one site. Recode to 1.5T or 3T.
 ```{r}
-table(df$scanner_status)
-df$field_strength <- recode(df$scanner_status, `1.5T_pre_2004` = "1.5T", `1.5T_post_2004` = "1.5T")
-table(df$field_strength)
+table(df$scanner_status)  %>%
+  kable(col.names = c("Scanner status", "Frequency")) %>%
+  kable_styling(full_width = F, position = "left")
 ```
-
+```{r}
+df$field_strength <- recode(df$scanner_status, `1.5T_pre_2004` = "1.5T", `1.5T_post_2004` = "1.5T")
+table(df$field_strength) %>%
+  kable(col.names = c("Field strength", "Frequency")) %>%
+  kable_styling(full_width = F, position = "left")
+```
 
 ## Generate baseline only data.frame and show data frame structure
 ```{r}
@@ -93,17 +100,21 @@ Total number of scans = `r sum(df.bl$NoScans)`
 df.bl %>%
   filter(NoScans >= 2) %>%
   group_by(control0rest1) %>%
-  tally()
+  tally() %>%
+  kable(col.names = c("Group", "n")) %>%
+  kable_styling(full_width = F, position = "left")
 ```
 ## Number of people with 3 or more scans
 ```{r}
 df.bl %>%
   filter(NoScans >= 3) %>%
   group_by(control0rest1) %>%
-  tally()
+  tally() %>%
+  kable(col.names = c("Group", "n")) %>%
+  kable_styling(full_width = F, position = "left")
 ```
 ## Generate demographics table using qwarps2
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, results='asis'}
 options(qwraps2_markup = "markdown", digits = 2)
 
 table1 <-
@@ -146,27 +157,26 @@ table1 <-
               "Missing" = ~ sum(is.na(DMT_YesNoNA)))
        )
 
-print(summary_table(dplyr::group_by(df.bl, control0rest1), table1),
-      rtitle = "Sample Chararcteristics",
-      cnames = c("Controls", "MS patients"))
+demo.table <- summary_table(dplyr::group_by(df.bl, control0rest1), table1)
+print(demo.table, cnames = c("Controls", "MS patients"), rtitle = "Sample Chararcteristics")
+
 ```
 
 ## Length of follow-up
 Get length of follow-up from longitudinal database.
 ```{r}
-options(digits = 3) ## return digits option to default
 df %>%
   filter(NoScans >= 2) %>%
   group_by(PatientID) %>%
   slice(which.max(interval)) %>%
-  # top_n(n = 1, wt = interval) %>%
   group_by(control0rest1) %>%
-  dplyr::summarise(mean(interval), sd(interval), min(interval), max(interval))
-options(digits = 7) ## return digits option to default
+  dplyr::summarise(mean(interval), sd(interval), min(interval), max(interval)) %>%
+  kable(digits = 2) %>%
+  kable_styling(full_width = F, position = "left")
 ```
 
 ## Demographics by MS subtype
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, results='asis'}
 options(qwraps2_markup = "markdown", digits = 2)
 
 table1 <-
@@ -208,16 +218,16 @@ print(summary_table(dplyr::group_by(df.bl, subtype), table1),
 
 ## Length of follow-up
 Get length of follow-up from longitudinal database.
-```{r paged.print=TRUE}
-options(digits = 3) ## return digits option to default
+```{r}
 df %>%
   filter(NoScans >= 2) %>%
   group_by(PatientID) %>%
   slice(which.max(interval)) %>%
   # top_n(n = 1, wt = interval) %>%
   group_by(subtype) %>%
-  dplyr::summarise(mean(interval), sd(interval), min(interval), max(interval))
-options(digits = 7) ## return digits option to default
+  dplyr::summarise(n = n(), mean = mean(interval), SD = sd(interval), min = min(interval), max = max(interval)) %>%
+  kable(digits = 2) %>%
+  kable_styling(full_width = F, position = "left")
 ```
 
 
@@ -246,8 +256,11 @@ describeBy(df.bl$BrainPAD, df.bl$control0rest1, mat = T, digits = 3) # brain-PAD
 ```
 
 ## Evalute potential covariates
+Distribution of scanner field strengths across study sites.
 ```{r}
-table(df.bl$Cohort, df.bl$field_strength)
+table(df.bl$Cohort, df.bl$field_strength) %>%
+  kable() %>%
+  kable_styling(full_width = F, position = "left", fixed_thead = T)
 ```
 
 ```{r}
@@ -260,16 +273,24 @@ anova(fit)
 a <- lm(BrainPAD ~ poly(age_at_baseline_scan1, 2) + gender + wb_vol_ratio_icv +  field_strength + Cohort, data = df.bl)
 summary(a)
 ```
-```{r paged.print=FALSE}
+I = independent variance; J = joint variance between >= 2 variables.
+```{r Hier part, paged.print=FALSE}
 h.p <- hier.part(y = df.bl$BrainPAD, 
                  xcan = df.bl[c("age_at_baseline_scan1","gender", "wb_vol_ratio_icv", "field_strength", "Cohort")], 
                  gof = "Rsqu",
                  barplot = FALSE)
-round(h.p$IJ, 3)
-round(h.p$I.perc, 1)
+round(h.p$IJ, 3) %>%
+  kable() %>%
+  kable_styling(full_width = F, position = "left")
 ```
+Percentage of the explained variance.
 ```{r}
-bar.colors <- c("darkgoldenrod2", "grey")
+round(h.p$I.perc, 1) %>%
+  kable() %>%
+  kable_styling(full_width = F, position = "left")
+```
+```{r Hier part plot}
+bar.colors <- c("darkgoldenrod2", "firebrick")
 barplot(t(as.matrix(h.p$IJ[,1:2])),
         names.arg = c("Age", "Sex", "NBV", "Field strength", "Cohort"),
         col = bar.colors,
@@ -280,6 +301,7 @@ legend("topright", c("Unique variance", "Shared variance"), fill = bar.colors, b
 ```
 
 Results suggest that age, age^2, normalised brain volume (AKA wb_vol_ratio_icv), gender, Cohort and field strength are appropriate covariates.
+
 # Predict brain-PAD based on group
 Function to run a linear mixed effect (LME) model adjusting for: fixed effects of age, age^2, gender and field strength; random effects of cohort.
 ```{r}
@@ -319,7 +341,9 @@ emmeans(object = fit, pairwise ~ control0rest1)
 # Meta-analysis looking at all the separate cohorts with MS/CIS patients and controls
 ### Check which cohorts contain healthy controls and patients.
 ```{r}
-table(df.bl$subtype, df.bl$Cohort)
+table(df.bl$subtype, df.bl$Cohort) %>%
+  kable() %>%
+  kable_styling(full_width = F, position = "left")
 ```
 
 ### Create data.frame with summary data appropriate for meta-analysis.
@@ -409,7 +433,9 @@ spms_n <- with(df.bl, table(subtype))["SPMS"]
 ppms_n <- with(df.bl, table(subtype))["PPMS"]
 
 plot.pryr %<a-% {
-with(df.bl, ehplot(BrainPAD, groups = subtype, ylim = c(-20,52), pch = 21, bg = ms.palette[as.numeric(subtype)], box = T, offset = 0.1, intervals = 50, xlab = "Groups", ylab = "Brain-PAD (years)", main = "Baseline Brain-PAD by study group")) + 
+with(df.bl, ehplot(BrainPAD, groups = subtype,
+                   ylim = c(-20,52), pch = as.numeric(subtype) + 20, bg = ms.palette[as.numeric(subtype)], box = T, offset = 0.1, intervals = 50,
+                   xlab = "Groups", ylab = "Brain-PAD (years)", main = "Baseline Brain-PAD by study group")) + 
   abline(0,0, lty = 2) +
   text(1,51, paste("N = ", control_n, sep = ""), cex = 0.8) +
   text(2,51, paste("N = ", cis_n, sep = ""), cex = 0.8) +
@@ -418,7 +444,7 @@ with(df.bl, ehplot(BrainPAD, groups = subtype, ylim = c(-20,52), pch = 21, bg = 
   text(5,51, paste("N = ", ppms_n, sep = ""), cex = 0.8)
 }
 plot.pryr
-cairo_pdf("plots/MS_UCL_MAGNIMS_combined_group_Brain-PAD.pdf", 8,8)
+cairo_pdf(filename = "~/Work/Brain ageing/Collaborations/MS/plots/MS_UCL_MAGNIMS_combined_group_Brain-PAD.pdf", width = 8, height = 8)
 plot.pryr
 dev.off()
 ```
@@ -428,20 +454,23 @@ dev.off()
 Uses sjPlot to calculated EMMs from linear regression model
 ```{r fig.width=15, warning=F}
 p1 <- ggplot(df.bl, aes(x = subtype, y = BrainPAD, fill = subtype)) +
-  geom_boxplot() +
+  geom_boxplot(outlier.size = 0.75) +
   facet_wrap(df.bl$Cohort, nrow = 1) +
   geom_hline(aes(yintercept = 0), lty = 2) +
-  theme_cowplot() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-  theme(legend.position = "none") +
+  theme_cowplot(font_size = 6) +
+  labs(x = "MS subtype", y = "Brain-PAD (years)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none", axis.title.x = element_text(vjust = -3), axis.title.y = element_text(vjust = 3)) +
   scale_fill_manual(values = ms.palette)
 
 fit <- lm(BrainPAD ~ control0rest1 + poly(age_at_baseline_scan1, 2) + gender + field_strength + wb_vol_ratio_icv + Cohort, data = df.bl)
-p2 <- plot_model(fit, type = "emm", terms = c("Cohort", "control0rest1"), colors = c("darkgreen", "firebrick"), show.legend = F) + theme_cowplot()
+p2 <- plot_model(fit, type = "emm", terms = c("Cohort", "control0rest1"), colors = "bw", show.legend = F) +
+  labs(x = "Cohort", y = "Brain-PAD (years)") +
+  theme_cowplot(font_size = 6) +
+  theme(axis.title.x = element_text(vjust = -3), axis.title.y = element_text(vjust = 3))
 
-plot_grid(list(p1,p2))
-
+p3 <- plot_grid(list(p1,p2), tags = T, margin = c(0.5,0.5,0.5,0.5))
 ggsave("~/Work/Brain ageing/Collaborations/MS/plots/brainPAD_cohort_subtype_boxplot_EMM_plot.pdf", width = 15, height = 10, useDingbats = FALSE)
+ggsave(plot = p3, "~/Work/Articles/Brain age/MS/figures/brainPAD_cohort_subtype_boxplot_EMM_plot.tif", width = 170, height = 120, device = "tiff", units = "mm")
 ```
 
 ## Brain-PAD boxplot by MS subtype in cohort UCL3 only
@@ -455,15 +484,15 @@ spms_n <- with(C3.bl, table(subtype))["SPMS"]
 ppms_n <- with(C3.bl, table(subtype))["PPMS"]
 
 plot.pryr %<a-% {
-  with(C3.bl, ehplot(BrainPAD, groups = subtype, ylim = c(-20,52), pch = 21, bg = ms.palette[-2][as.numeric(subtype)], box = T, offset = 0.1, intervals = 50, xlab = "Groups", ylab = "Brain-PAD (years)", main = "Baseline Brain-PAD by study group")) + 
+  with(C3.bl, ehplot(BrainPAD, groups = subtype, ylim = c(-20,52), pch = as.numeric(subtype) + 20, bg = ms.palette[-2][as.numeric(subtype)], box = T, offset = 0.1, intervals = 50, xlab = "Groups", ylab = "Brain-PAD (years)", main = "Baseline Brain-PAD by study group")) + 
   abline(0,0, lty = 2) +
-  text(1,51, paste("N = ", control_n, sep = ""), cex = 0.8) +
-  text(2,51, paste("N = ", rrms_n, sep = ""), cex = 0.8) +
-  text(3,51, paste("N = ", spms_n, sep = ""), cex = 0.8) +
-  text(4,51, paste("N = ", ppms_n, sep = ""), cex = 0.8)
+  text(1,51, paste("N = ", control_n, sep = ""), cex = 1.2) +
+  text(2,51, paste("N = ", rrms_n, sep = ""), cex = 1.2) +
+  text(3,51, paste("N = ", spms_n, sep = ""), cex = 1.2) +
+  text(4,51, paste("N = ", ppms_n, sep = ""), cex = 1.2)
 }
 plot.pryr
-cairo_pdf("plots/MS_cohort_C3_Brain-PAD.pdf", 8,8)
+cairo_pdf("~/Work/Brain ageing/Collaborations/MS/plots/MS_cohort_C3_Brain-PAD.pdf", 8,8)
 plot.pryr
 dev.off()
 ```
@@ -480,15 +509,20 @@ emmeans(object = fit_UCL3, pairwise ~ subtype)
 ```
 
 ## Brain-PAD by subtype descriptive statistics
-```{r paged.print=FALSE}
-with(df.bl, describeBy(BrainPAD, subtype, mat = T, digits = 1)) # brain-PAD by MS patient subtypes and controls
+```{r}
+ # brain-PAD by MS patient subtypes and controls
+with(df.bl, describeBy(BrainPAD, subtype, mat = T, digits = 1)[-1]) %>%
+  kable() %>%
+  kable_styling(full_width = F, position = "left")
 ```
 
 # Lesion filling
 To establish whether using the FSL lesion filling software influences brain-predicted age values.
 This analysis was conducted only in UCL patients (n = `r table(!is.na(lesion_df$filled_brain_age))["TRUE"]`).
-```{r paged.print=FALSE}
-with(subset(lesion_df, lesion_df$subtype != "control"), describeBy(filled_brain_age, subtype))
+```{r warning=FALSE}
+with(lesion_df, describeBy(filled_brain_age, subtype, mat = T)[-1,-1]) %>%
+  kable() %>%
+  kable_styling()
 ```
 Correlation between brain-predicted age from filled and unfilled images: Pearson's r = `r round(with(subset(lesion_df, lesion_df$subtype != "control"), cor(filled_brain_age, brain_age, use = "pairwise")),3)`.
 Median absolute error (MAE) between brain-predicted age from filled and unfilled images = `r with(subset(lesion_df, lesion_df$subtype != "control"), median(abs(filled_brain_age - brain_age), na.rm = T))` years.
@@ -498,10 +532,11 @@ Mean difference between brain-predicted age from filled and unfilled images = `r
 ```{r}
 ggplot(data = subset(lesion_df, lesion_df$subtype != "control"), aes(x = brain_age, y = filled_brain_age)) +
   geom_abline(slope = 1) +
-  geom_point(pch = 21, aes(fill = subtype), size = 2) +
+  geom_point(aes(shape = subtype, fill = subtype), size = 2) +
   labs(x = "Unfilled brain-predicted age (years)", y = "Lesion-filled brain-predicted age (years)") +
   xlim(c(20,90)) +
   scale_fill_manual(values = ms.palette[-1]) +
+  scale_shape_manual(values = c(22:25)) +
   theme_cowplot() + theme(legend.position = c(0.8, 0.2))
 ggsave("~/Work/Brain ageing/Collaborations/MS/plots/lesion_filling_brain_age_plot.pdf", width = 5, height = 5, useDingbats = FALSE)
 ```
@@ -511,7 +546,7 @@ mean.diff <- mean(lesion_df$brain_age - lesion_df$filled_brain_age, na.rm = T)
 sd.diff <- sd(lesion_df$brain_age - lesion_df$filled_brain_age, na.rm = T)
 ggplot(data = subset(lesion_df, lesion_df$subtype != "control"), aes(x = ((brain_age + filled_brain_age)/2), y = brain_age - filled_brain_age)) +
   geom_abline(slope = 0, lty = 2) +
-  geom_point(pch = 21, aes(fill = subtype), size = 2) +
+  geom_point(aes(shape = subtype, fill = subtype), size = 2) +
   geom_hline(yintercept = mean.diff, color = "darkgoldenrod1", lwd = 1) + # mean difference line
   geom_hline(yintercept = mean.diff + 1.96*sd.diff, color = "darkgoldenrod2", lty = 2) + # upper 95% line
   geom_hline(yintercept = mean.diff - 1.96*sd.diff, color = "darkgoldenrod2", lty = 2) + # lower 95% line
@@ -519,6 +554,7 @@ ggplot(data = subset(lesion_df, lesion_df$subtype != "control"), aes(x = ((brain
   labs(x = "Mean of filled/unfilled brain-predicted age (years)", y = "Unfilled - Lesion-filled brain-predicted age (years)") +
   # ylim(c(-20,20)) +
   scale_fill_manual(values = ms.palette[-1]) +
+  scale_shape_manual(values = c(22:25)) +
   theme_cowplot() + theme(legend.position = c(0.1, 0.8)) +
   annotate("text", x = 25, y = mean.diff + 1.96*sd.diff + 0.5, label = "+1.96*SD", color = "darkgoldenrod2") +
   annotate("text", x = 25, y = mean.diff - 1.96*sd.diff - 0.5, label = "-1.96*SD", color = "darkgoldenrod2") +
@@ -565,7 +601,9 @@ ggplot(subset(df.bl, !is.na(df.bl$EDSSbaseline)), aes(EDSSbaseline, fill = subty
 ## Test for interaction between subtype and EDSS on brain-PAD
 ```{r}
 fit.edss <- lmer(BrainPAD ~ EDSSbaseline * subtype + poly(age_at_baseline_scan1,2) + gender + field_strength + wb_vol_ratio_icv + (1|Cohort), data = subset(df.bl, df.bl$subtype != "control"))
-round(as.matrix(anova(fit.edss)["EDSSbaseline:subtype",]),3)
+round(as.matrix(anova(fit.edss)["EDSSbaseline:subtype",]),3) %>% 
+  kable(digits = 2) %>%
+  kable_styling()
 ```
 
 Use simple slopes from jtools to extract adjusted slopes for each subtype.
@@ -582,12 +620,12 @@ edss.plot <- interact_plot(fit.edss2, pred = "EDSSbaseline", modx = "subtype",
                            vary.lty = T,
                            facet.modx = T,
                            x.label = "EDSS", y.label = "Brain-PAD (years)",
-                           point.size = 1, 
+                           point.size = 0.5, 
                            modx.labels = c("CIS", "RRMS", "SPMS", "PPMS")) +
   geom_hline(yintercept = 0, lty = 2) +
   scale_fill_manual(values = ms.palette[2:5], name = "MS subtype") +
   scale_color_manual(values = ms.palette[2:5], name = "MS subtype") +
-  theme_cowplot()
+  theme_cowplot(font_size = 9)
 # ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/EDSS_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
 ```
 
@@ -603,7 +641,9 @@ When predicting brain-PAD in a LME model, the effect of age at diagnosis at base
 ### Test for interaction between subtype and age at diagnosis on brain-PAD:
 ```{r}
 fit.age <- lmer(BrainPAD ~ disease_onset_age * subtype + poly(age_at_baseline_scan1,2) + gender + field_strength + wb_vol_ratio_icv + (1|Cohort), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS"))
-round(as.matrix(anova(fit.age)["disease_onset_age:subtype",]),3)
+round(as.matrix(anova(fit.age)["disease_onset_age:subtype",]),3) %>%
+  kable(digits = 2) %>%
+  kable_styling()
 ```
 Use simple slopes from jtools to extract adjusted slopes for each subtype.
 ```{r message=FALSE, paged.print=FALSE}
@@ -615,12 +655,12 @@ sim_slopes(fit.age2, pred = "disease_onset_age", modx = "subtype", johnson_neyma
 age.plot <- interact_plot(fit.age2, pred = "disease_onset_age", modx = "subtype",
                           plot.points = T, interval = T, vary.lty = T, facet.modx = T, 
                           x.label = "Age at clincial diagnosis (years)", y.label = "Brain-PAD (years)",
-                          point.size = 1,
+                          point.size = 0.5,
                           modx.labels = c("RRMS", "SPMS", "PPMS")) + 
   geom_hline(yintercept = 0, lty = 2) + 
   scale_fill_manual(values = ms.palette[3:5], name = "MS subtype") +
   scale_color_manual(values = ms.palette[3:5], name = "MS subtype") +
-  theme_cowplot()
+  theme_cowplot(font_size = 9)
 # ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/diagnosis_age_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
 ```
 
@@ -636,31 +676,34 @@ When predicting brain-PAD in a LME model, the effect of time since diagnosis at 
 ### Test for interaction between subtype and time since diagnosis on brain-PAD
 ```{r}
 fit.time <- lmer(BrainPAD ~ disease_duration_at_baseline_scan1 * subtype + poly(age_at_baseline_scan1,2) + gender + field_strength + wb_vol_ratio_icv + (1|Cohort), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS" & df.bl$disease_duration > 0))
-round(as.matrix(anova(fit.time)["disease_duration_at_baseline_scan1:subtype",]),3)
+round(as.matrix(anova(fit.time)["disease_duration_at_baseline_scan1:subtype",]),3) %>%
+  kable(digits = 2) %>%
+  kable_styling()
 ```
 Use simple slopes from jtools to extract adjusted slopes for each subtype.
-```{r paged.print=FALSE}
+```{r SimSlopes, paged.print=FALSE}
 fit.time2 <- lmer(BrainPAD ~ disease_duration_at_baseline_scan1 * subtype + age_at_baseline_scan1 + gender + field_strength + wb_vol_ratio_icv + (1|Cohort), data = subset(df.bl, df.bl$subtype != "control" & df.bl$subtype != "CIS" & df.bl$disease_duration > 0))
 sim_slopes(fit.time2, pred = "disease_duration_at_baseline_scan1", modx = "subtype", johnson_neyman = F)
 ```
 
 ```{r message=FALSE, warning=FALSE}
 time.plot <- interact_plot(fit.time2, pred = "disease_duration_at_baseline_scan1", modx = "subtype",
-                           plot.points = T, interval = T, vary.lty = T, facet.modx = T, point.size = 1,
+                           plot.points = T, interval = T, vary.lty = T, facet.modx = T, point.size = 0.5,
                            x.label = "Time since clinical diagnosis (years)", y.label = "Brain-PAD (years)",
                            modx.labels = c("RRMS", "SPMS", "PPMS")) +
   geom_hline(yintercept = 0, lty = 2) +
   scale_fill_manual(values = ms.palette[3:5], name = "MS subtype") +
   scale_color_manual(values = ms.palette[3:5], name = "MS subtype") +
-  theme_cowplot()
+  theme_cowplot(font_size = 9)
 # ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/diagnosis_years_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
 ```
 
 ## Arrange EDSS, age at diagnosis and time since diagnosis plots
 Use cowplot package.
-```{r fig.height=16}
+```{r fig.height=10}
 cowplot::plot_grid(edss.plot, age.plot, time.plot, labels = "AUTO", ncol = 1)
 ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/clinical_brain-PAD_plots.pdf", height = 15, width = 8, useDingbats = FALSE)
+ggsave(filename = "~/Work/Articles/Brain age/MS/figures/Fig2_clinical_brain-PAD_plots.tif", height = 160, width = 80, device = "tiff", units = "mm", dpi = 300)
 ```
 
 # Brain age adjusted for brain volumes
@@ -680,17 +723,26 @@ Baseline clinical measures, adjusting for whole-brain volume as ratio of ICV, al
 EDSS_baseline <- lm.beta.lmer(lmer(EDSSbaseline ~ BrainPAD + wb_vol_ratio_icv + poly(age_at_scan, 2) + gender + field_strength + (1|Cohort), data = df.bl, control = lmerControl(optimizer = "Nelder_Mead")))
 Time_since_diagnosis <- lm.beta.lmer(model <- lmer(disease_duration ~ BrainPAD + wb_vol_ratio_icv + poly(age_at_scan, 2) + gender + field_strength + (1|Cohort), data = df.bl, control = lmerControl(optimizer = "Nelder_Mead")))
 Age_at_onset <- lm.beta.lmer(lmer(disease_onset_age ~ BrainPAD + wb_vol_ratio_icv + poly(age_at_scan, 2) + gender + field_strength + (1|Cohort), data = df.bl, control = lmerControl(optimizer = "Nelder_Mead")))
-round(as.data.frame(rbind(EDSS_baseline, Time_since_diagnosis, Age_at_onset)),3)
+round(as.data.frame(rbind(EDSS_baseline, Time_since_diagnosis, Age_at_onset)),3) %>%
+  kable() %>%
+  kable_styling(full_width = F, position = "left")
 ```
 
 # DMT
-Effects of disease modifying treatment on brain-PAD
+Effects of disease modifying treatment on brain-PAD.
 ```{r}
-table(df.bl$DMT_YesNoNA, df.bl$subtype)
+table(df.bl$DMT_YesNoNA, df.bl$subtype) %>%
+  kable() %>%
+  kable_styling(full_width = F, position = "left")
 ```
 Descriptive statistics brain-PAD by DMT status
-```{r paged.print=FALSE}
-with(subset(df.bl, df.bl$control0rest1 == "MS"), describeBy(BrainPAD, DMT_YesNoNA))
+```{r warning=FALSE}
+df.bl %>%
+  filter(control0rest1 == "MS") %>%
+  group_by(DMT_YesNoNA) %>%
+  dplyr::summarise(n = n(), mean = mean(BrainPAD), sd = sd(BrainPAD), min = min(BrainPAD), max = max(BrainPAD)) %>%
+  kable(digits = 2) %>%
+  kable_styling(full_width = F, position = "left")
 ```
 Fit LME model
 ```{r}
@@ -743,7 +795,7 @@ y1 <- df %>%
   filter(!is.na(latest_EDSS)) %>%
   mutate(EDSSchange = latest_EDSS - EDSSbaseline)
 
-# apply Arman's function
+## apply Arman's function
 y1$EDSS_progression <-  mapply(is_sustained_progression, y1$EDSSbaseline, y1$EDSSchange) 
 
 ## get baseline brain-PAD and brain volumetric measures
@@ -800,24 +852,26 @@ cox.zph(surv.model)
 ### Run survplot on survival object
 Based on a median split of brain-PAD.
 ```{r survplot}
-km.plot.df <- y3 %>% mutate(split_BrainPAD = ntile(BrainPAD_baseline, 2))
-str(km.plot.df)
-```
-
-```{r}
+km.plot.df <- y3 %>% dplyr::mutate(split_BrainPAD = ntile(BrainPAD_baseline, 2))
 S <- Surv(time = km.plot.df$interval, event = km.plot.df$EDSS_progression) # response function
-# survplot <- ggsurvplot(survfit(S ~ split_BrainPAD, data = km.plot.df),
-#                        surv.plot.height = 0.9,
-#                        ggtheme = theme_survminer(),
-#                        risk.table = T,
-#                        cumcensor = F,
-#                        conf.int = F,
-#                        palette = c("blue", "red"),
-#                        censor = F,
-#                        xlab = "Time (years)",
-#                        legend.labs = c("Brain-PAD < median", "Brain-PAD > median"))
-# survplot
-# ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/KM_brain-PAD_plot.pdf", height = 8, width = 8, print(survplot, newpage = FALSE), useDingbats = FALSE)
+sv.object <- survfit(S ~ split_BrainPAD, data = km.plot.df)
+survplot <- ggsurvplot(sv.object,
+                       ggtheme = theme_cowplot(font_size = 5, line_size = 0.2, rel_large = 1),
+                       risk.table = F,
+                       risk.table.fontsize = 1.2,
+                       cumcensor = F,
+                       conf.int = T,
+                       palette = c("blue", "red2"),
+                       linetype = c(1,3),
+                       size = 0.5,
+                       censor = F,
+                       xlab = "Time (years)",
+                       legend = c(0.7,0.85),
+                       legend.labs = c("Brain-PAD<median", "Brain-PAD>median"))
+survplot$plot <- survplot$plot + theme(legend.key.size = unit(1, "line"))
+survplot
+# # ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/KM_brain-PAD_plot.pdf", height = 8, width = 8, print(survplot, newpage = FALSE), useDingbats = FALSE)
+# ggsave(filename = "~/Work/Articles/Brain age/MS/figures/Fig5_KM_brain-PAD.tif", height = 50, width = 80, print(survplot, newpage = FALSE), device = "tiff", dpi = 300, units = "mm")
 ```
 The median value = `r round(median(km.plot.df$BrainPAD_baseline),2)` years.
 
@@ -856,8 +910,12 @@ z3 <- right_join(z1, z2, by = c("PatientID")) %>%
 ```
 
 ## Mean annualised rates of change in brain-PAD per group
-```{r paged.print=FALSE}
-describeBy(z3$BrainPAD_change/z3$interval, z3$subtype, mat = T, digits = 2)
+```{r}
+z3 %>%
+  dplyr::group_by(subtype) %>%
+  dplyr::summarise(n = n(), mean = mean(BrainPAD_change/interval, na.rm = T), SD = sd(BrainPAD_change/interval, na.rm = T), median = median(BrainPAD_change/interval, na.rm = T), min = min(BrainPAD_change/interval, na.rm = T), max = max(BrainPAD_change/interval, na.rm = T)) %>%
+  kable(digits = 2) %>%
+  kable_styling(full_width = F, position = "left")
 ```
 
 ## Determine change in EDSS from baseline to last follow-up
@@ -889,8 +947,12 @@ a3 <- right_join(a1, a2, by = c("PatientID")) %>%
 ```
 
 ## Mean annualised rates of change in EDSS per group
-```{r paged.print=FALSE}
-with(subset(a3, a3$control0rest1 != "control"), describeBy(EDSS_change/interval, subtype, mat = F, digits = 2))
+```{r}
+a3 %>%
+  dplyr::group_by(subtype) %>%
+  dplyr::summarise(n = n(), mean = mean(EDSS_change/interval, na.rm = T), SD = sd(EDSS_change/interval, na.rm = T), median = median(EDSS_change/interval, na.rm = T), min = min(EDSS_change/interval, na.rm = T), max = max(EDSS_change/interval, na.rm = T)) %>%
+  kable(digits = 2) %>%
+  kable_styling(full_width = F, position = "left")
 ```
 
 ## Relationship between annualised EDSS change and brain-PAD change
@@ -926,17 +988,19 @@ fit.change2 <- lm(BrainPAD_change ~ EDSS_change * subtype + wb_vol_ratio_icv_cha
 anova(fit.change2)
 ```
 
-
 Use jtools package to get slopes from the model, per subtype.
 ```{r paged.print=FALSE}
 sim_slopes(fit.change, pred = "EDSS_change", modx = "subtype", johnson_neyman = F, digits = 4)
 ```
 
 ```{r message=FALSE, warning=FALSE}
-interact_plot(fit.change, pred = "EDSS_change", modx = "subtype", plot.points = T, interval = T, facet.modx = T, x.label = "EDSS annualised change", y.label = "Brain-PAD annualised change", modx.labels = c("CIS", "RRMS", "SPMS", "PPMS")) + geom_hline(yintercept = 0, lty = 2) + theme_cowplot()  +
+interact_plot(fit.change, pred = "EDSS_change", modx = "subtype", plot.points = T, interval = T, facet.modx = T, point.size = 0.6, line.thickness = 0.5,
+              x.label = "EDSS annualised change", y.label = "Brain-PAD annualised change", modx.labels = c("CIS", "RRMS", "SPMS", "PPMS")) +
+  geom_hline(yintercept = 0, lty = 2) + theme_cowplot(font_size = 9)  +
   scale_fill_manual(values = ms.palette[-1], name = "MS subtype") +
   scale_color_manual(values = ms.palette[-1], name = "MS subtype")
 ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/change_EDSS_brain-PAD_plot.pdf", height = 5, width = 8, useDingbats = FALSE)
+ggsave(filename = "~/Work/Articles/Brain age/MS/figures/Fig3_change_EDSS_brain-PAD.tif", height = 60, width = 80, device = "tiff", units = "mm", dpi = 300)
 ```
 Correlate baseline brain-PAD with the number of follow-up scans completed in the n=`r with(subset(df.bl, df.bl$NoScans > 1 & df.bl$subtype == "SPMS"), table(subtype))["SPMS"]` with >1 scan.
 ```{r}
@@ -953,10 +1017,13 @@ summary(model_int.group)
 ```
 Use sjPlots to visualise the interactions, using estimated marginal means
 ```{r}
-plot_model(model_int.group, type = "emm", terms = c("interval [all]", "control0rest1"), colors = c("darkgreen", "firebrick"), legend.title = "Group", grid = F, show.data = F) + theme_cowplot() + labs(x = "Interval from baseline scan (years)", y = "Brain-PAD (years)") + geom_hline(yintercept = 0, lty = 2)
+plot_model(model_int.group, type = "emm", terms = c("interval [all]", "control0rest1"), colors = c("darkgreen", "firebrick"), legend.title = "Group", grid = F, show.data = F) +
+  theme_cowplot() +
+  labs(x = "Interval from baseline scan (years)", y = "Brain-PAD (years)") +
+  geom_hline(yintercept = 0, lty = 2)
 ```
 Generate estimate marginal trends for healthy controls and for all MS/CIS combined, using annualised difference between baseline and final follow-up.
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, include=FALSE}
 # emtrends(object = model_int.group, pairwise ~ control0rest1, var = "interval")
 ```
 
@@ -971,7 +1038,11 @@ round(anova(model_int.subtype)["subtype:interval",],3)
 # emtrends(object = model_int.subtype, pairwise ~ subtype, var = "interval")
 ```
 ```{r}
-plot_model(model_int.subtype, type = "emm", terms = c("interval [all]", "subtype"), legend.title = "Group", show.data = F, grid = F) + theme_cowplot() + labs(x = "Interval from baseline scan (years)", y = "Brain-PAD (years)") + geom_hline(yintercept = 0, lty = 2)
+plot_model(model_int.subtype, type = "emm", terms = c("interval [all]", "subtype"),
+           legend.title = "Group", show.data = F, grid = F, colors = "bw") +
+  theme_cowplot() +
+  labs(x = "Interval from baseline scan (years)", y = "Brain-PAD (years)") +
+  geom_hline(yintercept = 0, lty = 2)
 ```
 
 ### Longitudinal brain-PAD by interval plots
@@ -995,11 +1066,10 @@ ggplot(data = sub.sample.df, aes(x = interval, y = BrainPAD, fill = subtype)) +
 ggsave(filename = "~/Work/Brain ageing/Collaborations/MS/plots/longitudinal_brain-PAD_time_plot.pdf", height = 6, width = 6, useDingbats = FALSE)
 ```
 
-```{r}
+```{r fig.width=12}
 ggplot(data = df, aes(x = age_at_scan, y = BrainPAD, fill = subtype)) +
   geom_hline(yintercept = 0, lty = 2) +
-  geom_line(aes(group = PatientID, colour = subtype), alpha = 0.5, linetype = 1, size = 0.2) +
-  # geom_smooth(method = "lm", aes(col = subtype)) +
+  geom_line(aes(group = PatientID, colour = subtype), alpha = 0.6, linetype = 1, size = 0.2) +
   labs(x = "Time (years)", y = "Brain-predicted age difference (years)") +
   scale_fill_manual(values = ms.palette) +
   scale_color_manual(values = ms.palette) +
@@ -1020,19 +1090,22 @@ anova(model_int.duration)
 ```
 
 ```{r fig.width=12}
-onset.plt <- plot_model(model_int.onset, type = "pred", terms = c("interval [all]", "disease_onset_age[20,30,40,50,60]"), legend.title = "Onset age (years)", show.data = F, grid = F) +
-  geom_hline(yintercept = 0, lty = 2) +
-  labs(x = "Interval from baseline scan (years)", y = "Brain-PAD (years)") +
-  theme_cowplot()
-duration.plt <- plot_model(model_int.duration, type = "pred", terms = c("interval [all]", "disease_duration[0,7.5,15]"), legend.title = "Time since diagnosis (years)", show.data = F, grid = F) +
-  geom_hline(yintercept = 0, lty = 2) +
-  labs(x = "Interval from baseline scan (years)", y = "Brain-PAD (years)") +
-  theme_cowplot()
-cowplot::plot_grid(onset.plt, duration.plt, nrow = 1)
+onset.plt <- plot_model(model_int.onset, type = "pred", terms = c("interval [all]", "disease_onset_age[20,30,40,50,60]"), legend.title = "Onset age (years)", show.data = F, grid = F, colors = "bw") +
+  geom_hline(yintercept = 0, lty = 2, lwd = 0.5) +
+  labs(x = "Time since baseline (years)", y = "Brain-PAD (years)") +
+  theme_cowplot(font_size = 8) +
+  theme(legend.key.size = unit(1.5, "line"))
+duration.plt <- plot_model(model_int.duration, type = "pred", terms = c("interval [all]", "disease_duration[0,7.5,15]"), legend.title = "Years since diagnosis", show.data = F, grid = F, colors = "bw") +
+  geom_hline(yintercept = 0, lty = 2, lwd = 0.5) +
+  labs(x = "Time since baseline (years)", y = "Brain-PAD (years)") +
+  theme_cowplot(font_size = 8) +
+  theme(legend.key.size = unit(1.5, "line"))
+cowplot::plot_grid(onset.plt, duration.plt, nrow = 2)
+ggsave(filename = "~/Work/Articles/Brain age/MS/figures/Fig4_time_onset.tif", height = 120, width = 80, device = "tiff", units = "mm", dpi = 300)
 ```
 
 ## Plot(s) with age and estimated age for each individual from each group and site
-```{r}
+```{r fig.width=12}
 ggplot(data = df, aes(x = age_at_scan, y = BrainAge, fill = subtype)) +
   geom_abline(slope = 1, lty = 2) +
   geom_line(aes(group = PatientID, colour = subtype), alpha = 0.5, linetype = 1, size = 0.25) +
